@@ -1,3 +1,4 @@
+Hospital Medical Debt
 ================
  - [Overview](#overview)
  - [Methodology](#method)
