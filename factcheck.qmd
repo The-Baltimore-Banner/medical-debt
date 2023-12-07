@@ -1,0 +1,638 @@
+
+```{r}
+
+options(scipen = 999)
+
+```
+
+
+"For decades, Maryland hospitals have sued patients with unpaid bills, amassing hundreds of millions of dollars in judgments since 2000."
+
+```{r}
+
+judgments_by_year <- cc_hospital_judgments |>
+  select(case_number, entered_date, amount) |>
+  unique() |>
+  mutate(year = year(entered_date)) |>
+  group_by(year) |>
+  summarise(cc_amount = sum(amount, na.rm = TRUE)) |>
+  full_join(
+
+    mcci_hospital_judgments |>
+      select(date, amount) |>
+      unique() |>
+      mutate(year = year(date)) |>
+      group_by(year) |>
+      summarise(mcci_amount = sum(amount, na.rm = TRUE))
+
+  ) |>
+  full_join(
+
+    dscivil_hospital_judgments |>
+      select(case_number, judgment_date, judgment_amount) |>
+      unique() |>
+      mutate(year = year(judgment_date)) |>
+      group_by(year) |>
+      summarise(dscivil_amount = sum(judgment_amount, na.rm = TRUE))
+    
+  ) |>
+  full_join(
+
+    odycivil_hospital_judgments |>
+      select(case_number, judgment_ordered_date, principal_amount) |>
+      unique() |>
+      mutate(year = year(judgment_ordered_date)) |>
+      group_by(year) |>
+      summarise(odycivil_amount = sum(principal_amount, na.rm = TRUE)) |>
+      filter(year != 1988)
+    
+  ) |>
+  full_join(
+    
+    pgv_hospital_judgments |>
+      select(case_number, judgment_date, amount) |>
+      unique() |>
+      mutate(year = year(judgment_date)) |>
+      group_by(year) |>
+      summarise(pgv_amount = sum(amount, na.rm = TRUE))
+  
+  ) 
+
+judgments_by_year[is.na(judgments_by_year)] <- 0
+
+judgments_by_year <- judgments_by_year |>
+  mutate(total = cc_amount + mcci_amount + dscivil_amount + odycivil_amount + pgv_amount) |>
+  filter(year != 0) |>
+  arrange(year)
+
+sum(judgments_by_year$total)
+
+
+```
+
+
+[[ BAR CHART SHOWING JUDGMENTS BY YEAR ]]
+
+```{r}
+
+#write_csv(judgments_by_year, "data/viz/judgments-by-year.csv")
+
+ggplot(judgments_by_year, aes(x=year, y=total)) +
+  geom_bar(stat="identity")
+
+```
+
+"Johns Hopkins Medicine won’t comment about specific patients, though in a statement officials said the system stopped initiating new lawsuits in 2020."
+
+```{r}
+
+cc_hopkins <- cc_hospital_plaintiffs |>
+  filter(hospital_join_name == "johns hopkins hospital, the")
+
+cc_hopkins_judgments <- cc_hospital_judgments|>
+  filter(case_number %in% cc_hopkins$case_number) |>
+  arrange(desc(entered_date))
+
+mcci_hopkins <- mcci_hospital_plaintiffs |>
+  filter(hospital_join_name == "johns hopkins hospital, the")
+
+mcci_hopkins_judgments <- mcci_hospital_judgments |>
+  filter(case_number %in% mcci_hopkins$case_number) |>
+  arrange(desc(date))
+
+dscivil_hopkins_plaintiffs <- dscivil_hospital_plaintiffs |>
+  filter(hospital_join_name == "johns hopkins hospital, the")
+
+dscivil_hospital_judgments |>
+  filter(case_number %in% dscivil_hopkins_plaintiffs$case_number) |>
+  arrange(desc(judgment_date))
+
+odycivil_hopkins_plaintiffs <- odycivil_hospital_plaintiffs |>
+    filter(hospital_join_name == "johns hopkins hospital, the")
+
+odycivil_hopkins_judgments <- odycivil_hospital_judgments |>
+  filter(case_number %in% odycivil_hopkins_plaintiffs$case_number) |>
+  arrange(desc(judgment_ordered_date))
+
+odycivil_hopkins_judgments |>
+  mutate(year = year(judgment_entry_date)) |>
+  group_by(year) |>
+  count() |>
+  ggplot(aes(x=year, y = n)) +
+  geom_bar(stat="identity")
+
+```
+
+"Nearly all hospitals in Maryland have turned to the courts in the past for judgments and to garnish wages from patients who don’t pay their bills."
+
+```{r}
+
+# Extracting unique values from each list
+unique_cc = unique(cc_hospital_plaintiffs$hospital_join_name)
+unique_dscivil = unique(dscivil_hopkins_plaintiffs$hospital_join_name)
+unique_mcci = unique(mcci_hospital_plaintiffs$hospital_join_name)
+unique_odycivil = unique(odycivil_hopkins_plaintiffs$hospital_join_name)
+unique_pgv = unique(pgv_hospital_plaintiffs$hospital_join_name)
+
+# Combining all unique values into one list and then getting the unique values of that combined list
+combined_unique = unique(c(unique_cc, unique_dscivil, unique_mcci, unique_odycivil, unique_pgv))
+
+hospital_name_crosswalk |>
+  select(hospital_join_name) |>
+  unique() |>
+  filter(hospital_join_name %notin% combined_unique)
+
+```
+
+"Peninsula Regional has led since 2000 with 36,000 judgments, totalling $47 million, The Banner analysis found."
+
+```{r}
+
+judgments_with_hospital <- cc_hospital_judgments |>
+  select(case_number, entered_date, amount) |>
+  unique() |>
+  left_join(cc_hospital_plaintiffs |>
+              select(case_number, hospital_join_name)) |>
+  bind_rows(
+
+    mcci_hospital_judgments |>
+      select(case_number, date, amount) |>
+      unique() |>
+      left_join(mcci_hospital_plaintiffs |>
+                  select(case_number, hospital_join_name))
+    
+  ) |>
+  bind_rows(
+
+    dscivil_hospital_judgments |>
+      select(case_number, judgment_date, judgment_amount) |>
+      unique() |>
+      left_join(dscivil_hospital_plaintiffs |>
+                  select(case_number, hospital_join_name)) |>
+      rename(date = judgment_date,
+             amount = judgment_amount)
+
+  ) |>
+  bind_rows(
+    
+    odycivil_hospital_judgments |>
+      select(case_number, judgment_entry_date, amount_of_judgment) |>
+      unique() |>
+      left_join(odycivil_hospital_plaintiffs |>
+                  select(case_number, hospital_join_name)) |>
+      rename(date = judgment_entry_date,
+             amount = amount_of_judgment)
+
+  ) |>
+  bind_rows(
+    
+    pgv_hospital_judgments |>
+      select(case_number, judgment_date, amount) |>
+      unique() |>
+      left_join(pgv_hospital_plaintiffs |>
+                  select(case_number, hospital_join_name)) |>
+      rename(date = judgment_date)
+    
+  )
+
+judgments_by_hospital <- judgments_with_hospital |>
+  rename(hospital = hospital_join_name) |>
+  group_by(hospital)|>
+  summarise(
+    judgments = n(),
+    amount = sum(amount, na.rm = TRUE)
+  ) |>
+  arrange(desc(judgments)) 
+
+judgments_by_hospital |>
+  filter(str_detect(hospital, "penin"))
+
+
+```
+
+"Hopkins-operated Suburban Hospital in Bethesda won slightly more from 14,400 judgments for $48 million."
+
+```{r}
+
+judgments_by_hospital |>
+  filter(str_detect(hospital, "suburb"))
+
+```
+
+"LifeBridge’s Sinai Hospital in Baltimore won $41 million from about 18,000 judgments."
+
+```{r}
+
+judgments_by_hospital |>
+  filter(str_detect(hospital, "sinai"))
+
+```
+
+"Judgments in favor of hospitals totalled $400 million, the vast majority for medical debt."
+
+```{r}
+
+sum(judgments_by_year$total)
+
+```
+
+[[ TOTAL JUDGMENT DOLLARS WON BY HOSPITAL CHART ]]
+
+```{r}
+
+judgments_by_hospital <- judgments_by_hospital |>
+  ungroup() |>
+  mutate(hospital = case_when(
+    str_detect(hospital, "university of m") ~ "university of maryland medical system average",
+    TRUE ~ hospital
+  )) |>
+  group_by(hospital) |>
+  summarise(judgments = sum(judgments),
+            amount = sum(amount)) |>
+  mutate(amount = case_when(
+    str_detect(hospital, "university of m") ~ amount/10,
+    TRUE ~ amount
+  )) |>
+  arrange(desc(amount))
+
+ggplot(judgments_by_hospital |>
+         arrange(desc(amount)), aes(y=hospital, x=amount)) +
+  geom_bar(stat = "identity")
+
+#write_csv(judgments_by_hospital |>
+#            filter(hospital != "university of maryland medical system") |>
+#            mutate(hospital = str_to_title(hospital)) |>
+#            slice(1:10), "data/viz/judgments-by-hospital.csv")
+
+```
+
+"It’s been big business for hospitals’ attorneys, too. Thirty-eight attorneys have won at least $1 million in judgments for Maryland hospitals, and nine have exceeded $10 million."
+
+```{r}
+
+judgments_with_attorney <- cc_hospital_judgments |>
+  select(case_number, entered_date, amount) |>
+  unique() |>
+  left_join(cc_hospital_attorneys |>
+              select(case_number, name)) |>
+  rename(date = entered_date)|>
+  bind_rows(
+
+    mcci_hospital_judgments |>
+      select(case_number, date, amount) |>
+      unique() |>
+      left_join(mcci_hospital_attorneys |>
+                  select(case_number, name))
+    
+  ) |>
+  bind_rows(
+
+    dscivil_hospital_judgments |>
+      select(case_number, judgment_date, judgment_amount) |>
+      unique() |>
+      left_join(dscivil_hospital_attorneys |>
+                  select(case_number, name)) |>
+      rename(date = judgment_date,
+             amount = judgment_amount)
+
+  ) |>
+  bind_rows(
+    
+    odycivil_hospital_judgments |>
+      select(case_number, judgment_entry_date, amount_of_judgment) |>
+      unique() |>
+      left_join(odycivil_hospital_attorneys |>
+                  select(case_number, name)) |>
+      rename(date = judgment_entry_date,
+             amount = amount_of_judgment)
+
+  ) |>
+  bind_rows(
+    
+    pgv_hospital_judgments |>
+      select(case_number, judgment_date, amount) |>
+      unique() |>
+      left_join(pgv_hospital_attorneys |>
+                  select(case_number, name)) |>
+      rename(date = judgment_date)
+    
+  ) |>
+  filter(!is.na(amount),
+         !is.na(name))
+
+#write_csv(judgments_with_attorney, "data/judgments_with_attorney_for_openrefine.csv")
+
+judgments_by_attorney <- read_csv("data/judgments-with-attorney-refined.csv") |>
+  mutate(name = case_when(
+    name == "bloom, neil j" ~ "bloom, neil jeffrey",
+    name == "bloom, esq, neil j." ~ "bloom, neil jeffrey",
+    .default = name
+  )) |>
+  unique() |>
+  group_by(name) |>
+  summarise(judgments = n(),
+            amount = sum(amount)) |>
+  arrange(desc(amount)) |>
+  ungroup()
+
+judgments_by_attorney |>
+  filter(amount > 1000000)
+
+```
+
+", and nine have exceeded $10 million"
+```{r}
+
+judgments_by_attorney |>
+  filter(amount > 10000000)
+
+```
+
+"Two attorneys were responsible for 37% of all judgments since 2000, The Banner analysis showed."
+
+```{r}
+
+#write_csv(judgments_by_attorney |>
+#            mutate(name = str_to_title(name)) |>
+#            slice(1:10), "data/viz/judgments-by-attorney.csv")
+
+judgments_by_attorney |>
+  mutate(percent = (amount/sum(amount))*100)
+
+```
+
+"The average hospital debt in Maryland, based on court judgments in The Banner analysis, was about $2,200."
+
+```{r}
+
+all_judgment_amounts <- cc_hospital_judgments |>
+  select(case_number, amount) |>
+  bind_rows(
+
+    mcci_hospital_judgments |>
+      select(amount)
+
+  ) |>
+  bind_rows( 
+    
+    dscivil_hospital_judgments |>
+      select(case_number, judgment_amount) |>
+      filter(judgment_amount != 0) |>
+      rename(amount = judgment_amount)
+    
+  ) |>
+  bind_rows(
+
+    odycivil_hospital_judgments |>
+      select(case_number, amount_of_judgment) |>
+      rename(amount = amount_of_judgment)
+    
+  ) |>
+  bind_rows( 
+    
+    pgv_hospital_judgments |>
+      select(case_number, amount)
+    
+  ) |>
+  filter(amount != 0) |>
+  unique()
+
+mean(all_judgment_amounts$amount, na.rm = TRUE)
+
+```
+
+"Most debtors live in poorer neighborhoods. About half of all judgments awarded to Maryland hospitals since 2012 were won in cases against defendants with addresses in Census tracts with some of the lowest median incomes. "
+
+```{r}
+
+judgments_by_tract <- read_csv("data/judgments_by_tract.csv")
+
+variables <- c(
+  "B19013_001", "B01003_001",
+  "B03002_001", "B03002_003", "B03002_004", "B03002_005", "B03002_006",
+  "B03002_007", "B03002_008", "B03002_009", "B01001_003", "B01002_001",
+  "B19013_001", "B17001_001", "B17001_002", "B15003_002", "B15003_016",
+  "B15003_018", "B15003_019", "B15003_020", "B15003_021", "B15003_022",
+  "B25001_001", "B25003_002", "B25003_003", "B25064_001", "B11005_002",
+  "B11001_003", "B11001_007", "B23025_001", "B23025_002", "B23025_005",
+  "B08301_003", "B08301_004", "B08301_010", "B08301_019", "B08301_021", 
+  "B11005_001", "B11005_004", "B11005_006", "B11005_007"
+  #"B08301_023"
+)
+
+acs_vars <- load_variables(2021, "acs5", cache = TRUE)
+
+filtered_acs_vars <- acs_vars %>%
+  filter(name %in% variables) %>%
+  mutate(label = case_when(
+    label == "Estimate!!Total" ~ paste0(label, "_", concept),
+    label == "Estimate!!Total:" ~ paste0(label, "_", concept),
+    TRUE ~ label
+  ))
+
+# Retrieve ACS data
+acs_data <- get_acs(geography = "tract", # Change the geography as needed
+                    variables = variables,
+                    year = 2021,
+                    state = "MD",
+                    #county = "Anne Arundel",
+                    survey = "acs5")
+
+rename_vector <- setNames(filtered_acs_vars$name, 
+                          str_replace_all(filtered_acs_vars$label, " ", "_"))
+
+# Rename the columns in acs_data
+acs_data <- acs_data %>%
+  select(-moe) %>%
+  pivot_wider(values_from = estimate, names_from = variable)
+
+acs_data <- rename(acs_data, 
+                   !!rename_vector) %>%
+  clean_names()
+
+
+acs_data <- acs_data %>% 
+  mutate(
+    percent_white = (estimate_total_not_hispanic_or_latino_white_alone/estimate_total_total_population)*100,
+    percent_black = (estimate_total_not_hispanic_or_latino_black_or_african_american_alone/estimate_total_total_population)*100,
+    percent_american_indian = (estimate_total_not_hispanic_or_latino_american_indian_and_alaska_native_alone/estimate_total_total_population)*100,
+    percent_asian = (estimate_total_not_hispanic_or_latino_asian_alone/estimate_total_total_population)*100,
+    percent_native_hawaiian = (estimate_total_not_hispanic_or_latino_native_hawaiian_and_other_pacific_islander_alone/estimate_total_total_population)*100,
+    percent_other_race = (estimate_total_not_hispanic_or_latino_some_other_race_alone/estimate_total_total_population)*100,
+    percent_two_or_more_races = (estimate_total_not_hispanic_or_latino_two_or_more_races/estimate_total_total_population)*100,
+    percent_single_mothers = (estimate_total_households_with_one_or_more_people_under_18_years_family_households_other_family_female_householder_no_spouse_present/estimate_total_households_by_presence_of_people_under_18_years_by_household_type)*100,
+  ) %>%
+  left_join(judgments_by_tract %>%
+              #rename(geoid = geoid20) %>%
+              select(geoid, judgments))
+
+acs_data[is.na(acs_data)] <- 0
+
+acs_data
+
+```
+
+```{r}
+
+library(corrr)
+
+correlated_acs_data <- correlate(
+  acs_data %>%
+    filter(estimate_median_household_income_in_the_past_12_months_in_2021_inflation_adjusted_dollars > 0) |>
+    select(-geoid, -name)) %>%
+  select(term, judgments) %>%
+  arrange(desc(judgments))
+
+correlated_acs_data
+
+```
+
+[[ INCOME QUINTILE VIZ ]]
+
+
+```{r}
+
+quantile_breaks <- quantile(acs_data$estimate_median_household_income_in_the_past_12_months_in_2021_inflation_adjusted_dollars, 
+                            probs = c(0, 0.25, 0.5, 0.75, 1), 
+                            #probs = c(0, 0.20, 0.40, 0.60, 0.80, 1),
+                            na.rm = TRUE)
+
+acs_data |>
+  select(geoid, judgments, estimate_median_household_income_in_the_past_12_months_in_2021_inflation_adjusted_dollars) |>
+  mutate(income_quantile_bin = cut(estimate_median_household_income_in_the_past_12_months_in_2021_inflation_adjusted_dollars,
+                            breaks = quantile_breaks,
+                            labels = c("lowest", "lower", "higher", "highest"),
+                            include.lowest = TRUE)) |>
+  rename(median_income = estimate_median_household_income_in_the_past_12_months_in_2021_inflation_adjusted_dollars) |>
+  filter(median_income > 0) |>
+  group_by(income_quantile_bin) |>
+  summarise(
+    #geoids = n(),
+    judgments = sum(judgments),
+    min_median_income = min(median_income),
+    max_median_income = max(median_income),
+      ) |>
+  mutate(perc = (judgments/sum(judgments))*100)# |>
+  #write_csv("data/viz/tract-quantile-income-judgments.csv")
+
+```
+
+"The judgments ranged from about $750,000 to just 17 cents."
+
+```{r}
+
+max(all_judgment_amounts$amount, na.rm = TRUE)
+
+```
+
+```{r}
+
+min(all_judgment_amounts$amount, na.rm = TRUE)
+
+```
+
+"Legal action from Carroll Hospital, for example, ebbed in 2005 and 2012, only to rise again and peak in 2019 before trending down and cratering during the coronavirus pandemic. Judgments virtually ended in 2020."
+
+```{r}
+
+cc_carroll <- cc_hospital_plaintiffs |>
+  filter(hospital_join_name == "carroll hospital center")
+
+cc_carroll_cases <- cc_hospital_cases|>
+  filter(case_number %in% cc_carroll$case_number) |>
+  arrange(desc(filing_date)) |>
+  filter(case_type == "contract")
+
+mcci_carroll <- mcci_hospital_plaintiffs |>
+  filter(hospital_join_name == "carroll hospital center")
+
+mcci_carroll_cases <- mcci_hospital_cases |>
+  filter(case_number %in% mcci_carroll$case_number) |>
+  arrange(desc(filing_date)) |>
+  filter(sub_type == "contract")
+
+dscivil_carroll_plaintiffs <- dscivil_hospital_plaintiffs |>
+  filter(hospital_join_name == "carroll hospital center")
+
+dscivil_carroll_cases <- dscivil_hospital_cases |>
+  filter(case_number %in% dscivil_carroll_plaintiffs$case_number) |>
+  arrange(desc(filing_date))|>
+  filter(claim_type == "contract")
+
+odycivil_carroll_plaintiffs <- odycivil_hospital_plaintiffs |>
+    filter(hospital_join_name == "carroll hospital center")
+
+odycivil_carroll_cases <- odycivil_hospital_cases |>
+  filter(case_number %in% odycivil_carroll_plaintiffs$case_number) |>
+  arrange(desc(filing_date))|>
+  filter(case_type == "contract")
+
+pgv_carroll_plaintiffs <- pgv_hospital_plaintiffs |>
+    filter(hospital_join_name == "carroll hospital center")
+
+pgv_carroll_cases <- pgv_hospital_cases |>
+  filter(case_number %in% pgv_carroll_plaintiffs$case_number) |>
+  arrange(desc(filing_date))|>
+  filter(case_type == "contract")
+
+carroll_filings_by_year <- odycivil_carroll_cases |>
+  mutate(year = year(filing_date)) |>
+  group_by(year) |>
+  summarise(odycivil = n()) |>
+  full_join(
+    
+    dscivil_carroll_cases |>
+      mutate(year = year(filing_date)) |>
+      group_by(year) |>
+      summarise(dscivl = n())
+    
+  ) |>
+  full_join(
+    
+    pgv_carroll_cases |>
+      mutate(year = year(filing_date)) |>
+      group_by(year) |>
+      summarise(pgv = n())
+    
+  ) |>
+  full_join(
+    
+    cc_carroll_cases |>
+      mutate(year = year(filing_date)) |>
+      group_by(year) |>
+      summarise(cc = n())
+    
+  )  |>
+  full_join(
+    
+    mcci_carroll_cases |>
+      mutate(year = year(filing_date)) |>
+      group_by(year) |>
+      summarise(mcci = n())
+    
+  )
+
+
+carroll_filings_by_year[is.na(carroll_filings_by_year)] <- 0
+
+carroll_filings_by_year <- carroll_filings_by_year |>
+  mutate(total = odycivil + dscivl + pgv + cc + mcci)
+
+carroll_filings_by_year |>
+  ggplot(aes(x=year, y = total)) +
+  geom_bar(stat="identity")
+
+```
+
+"Recent declines overall began in 2015 and continued as courts dealt with slowdowns tied to the coronavirus pandemic. They cratered in 2022 and virtually ended this year."
+
+```{r}
+
+ggplot(judgments_by_year, aes(x=year, y=total)) +
+  geom_bar(stat="identity")
+
+```
+
+
+
+

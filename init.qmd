@@ -1,0 +1,514 @@
+
+```{r}
+
+library(tidyverse)
+library(janitor)
+library(sf)
+library(stringdist)
+library(mapview)
+library(sf)
+library(purrr)
+library(tidycensus)
+
+'%notin%' <- function(x, table) {
+  !('%in%'(x, table))
+}
+
+lower_df <- function(input_df){
+  names <- colnames(input_df)
+  output_df <- input_df
+  names <- colnames(output_df)
+  for (name in names){
+    if (is.character(output_df[[name]])){
+      output_df[[name]] <- tolower(output_df[[name]])
+      #print('yes')
+    } else {
+      output_df[[name]] <- output_df[[name]]
+      #print('no')
+    }
+  }
+  return(output_df)
+}
+
+grouper <- function(input_df, group_by_column, new_column_name = "n()"){
+  output_df <- input_df %>%
+      group_by(.data[[group_by_column]]) %>%
+      summarise(temp_count = n()) %>%
+      mutate(percent = temp_count/sum(temp_count)*100) %>%
+      arrange(desc(percent)) %>%
+      rename(!!new_column_name := temp_count)
+  return(output_df)
+}
+
+group_count <- function(input_df, group_column_name='n()', state_filter=NA, start_col = 1){
+  column_names <- colnames(input_df)
+  if(!is.na(state_filter)){
+    input_df <- input_df %>%
+      filter(state == state_filter)
+  }
+  for (column in column_names[start_col:length(column_names)]){
+    output <- grouper(input_df, column, group_column_name)
+    print(output)
+  }
+}
+
+
+#original filter
+filter_hospital <- function(input_df, input_column, input_score=.15){
+  
+  output_df <- input_df %>%
+    filter(match_score <= input_score | str_detect(.data[[input_column]], "finan center|medical center|medical system|hospital| medical ctr|adventist healthcare|krieger inst|saint luke inst|st. luke inst|brook lane health|western maryland center|deer's head center|behavioral health|rehabilitation"))
+  
+  return(output_df)
+  
+}
+
+#key colisions
+best_match <- function(name, name_list) {
+  
+  #name = "adventist healthcare inc"
+  #name_list = hospitals$facility_name
+  
+  if (length(name_list) == 0) {
+    return(NA)
+  }
+  scores <- stringdist::stringdistmatrix(name, name_list, method = "jw")
+  best_score <- min(scores)
+  best_match_ <- name_list[which.min(scores)]
+  return(c(best_match_, best_score))
+}
+
+#this code inititally imported hospitals
+#hospitals <- read_sf("data/maryland-hospitals.geojson") |>
+#  st_drop_geometry() |>
+#  as.data.frame() |>
+#  lower_df() |>
+#  clean_names() |>
+#  arrange(desc(facility_name)) |>
+#  select(county, facility_name, facility_address, facility_city, facility_zip, license_capacity, type) |>
+#  arrange(facility_name)
+
+#write_csv(hospitals, "data/hospitals.csv")
+
+hospitals <- read_csv("data/hospitals.csv")
+
+```
+
+### KEY COLLISSION EXAMPLE
+
+This takes a while to run. It is commented out so you do not accidentally run it without intending to.
+
+```{r}
+cc_plaintiffs <- read_csv("data/cc/cc_plaintiffs.csv") |>
+  clean_names() |>
+  lower_df()
+
+#name and business org name match
+cc_plaintiffs |>
+  #filter(str_detect(name, "hospital")) |>
+  select(name, business_org_name, case_number) |>
+  filter(name != business_org_name)
+
+cc_plaintiffs <- cc_plaintiffs |>
+  select(name, case_number) 
+
+#key_cc_plaintiffs <- cc_plaintiffs |> 
+#  rowwise() |>
+#  mutate(match_name = best_match(name, hospitals$facility_name)[1],
+#         match_score = as.numeric(best_match(name, hospitals$facility_name)[2]))
+  
+#write_csv(key_cc_plaintiffs, "data/key-collission/unfiltered/cc_plaintiffs.csv")
+
+#key_cc_plaintiffs |>
+#  filter(match_score <= .15) #|>
+#  write_csv("data/key-collission/filtered/cc_plaintiffs.csv")
+
+```
+
+#MAKE UNIQUE PLAINTIFFS KEY
+
+```{r}
+
+cc_plaintiffs <- read_csv("data/cc/cc_plaintiffs.csv")
+
+mcci_plaintiffs <- read_csv("data/mcci/mcci_plaintiffs.csv") %>%
+  lower_df() %>%
+  clean_names()
+
+dscivil_parties <- read_csv("data/dscivil/dscivil_related_persons.csv") %>%
+  lower_df() %>%
+  clean_names() %>%
+  filter(str_detect(connection, "plaintiff"))
+
+odycivil_involved_parties <- read_csv("data/odycivil/odycivil_involved_parties.csv") %>%
+  lower_df() %>%
+  clean_names() %>%
+  filter(str_detect(party_type, "plaintiff"))
+
+pgv_plaintiffs <- read_csv("data/pgv/pgv_plaintiffs.csv") %>%
+  lower_df() %>%
+  clean_names()
+
+```
+
+
+```{r}
+
+plaintiff_names <- cc_plaintiffs |>
+  select(name) |>
+  bind_rows(mcci_plaintiffs |>
+              select(name)) |>
+  bind_rows(dscivil_parties |>
+              select(name)) |>
+  bind_rows(pgv_plaintiffs |>
+              select(name)) |>
+  bind_rows(odycivil_involved_parties |>
+              select(name)) |>
+  lower_df() |>
+  arrange(name)
+
+
+unique_plaintiff_names <- plaintiff_names |>
+  unique()
+     
+glimpse(unique_plaintiff_names)
+
+```
+
+
+```{R}
+
+
+best_match <- function(name, name_list) {
+  # Check for empty name list
+  if (length(name_list) == 0) {
+    return(list(JW = c(NA, NA), LV = c(NA, NA), Cosine = c(NA, NA), Ngram = c(NA, NA)))
+  }
+
+  # Initialize a list to store the results
+  results <- list()
+
+  # Jaro-Winkler
+  scores_jw <- stringdist::stringdistmatrix(name, name_list, method = "jw")
+  best_match_jw <- name_list[which.min(scores_jw)]
+  results$JW <- c(best_match_jw, min(scores_jw))
+
+  # Levenshtein
+  scores_lv <- stringdist::stringdistmatrix(name, name_list, method = "lv")
+  best_match_lv <- name_list[which.min(scores_lv)]
+  results$LV <- c(best_match_lv, min(scores_lv))
+
+  # Cosine
+  scores_cosine <- stringdist::stringdistmatrix(name, name_list, method = "cosine")
+  best_match_cosine <- name_list[which.min(scores_cosine)]
+  results$Cosine <- c(best_match_cosine, min(scores_cosine))
+
+  # N-gram
+  scores_ngram <- stringdist::stringdistmatrix(name, name_list, method = "qgram")
+  best_match_ngram <- name_list[which.min(scores_ngram)]
+  results$Ngram <- c(best_match_ngram, min(scores_ngram))
+
+  return(results)
+}
+
+#key_unique_plaintiff_names <- unique_plaintiff_names %>%
+#  mutate(
+#    match_data = map(.x = name, ~best_match(.x, hospitals$facility_name)),
+#    
+#    # Extracting data for each method
+#    jw_name = map_chr(match_data, ~ .x$JW[1]),
+#    jw_score = map_dbl(match_data, ~ as.numeric(.x$JW[2])),
+    
+#    lv_name = map_chr(match_data, ~ .x$LV[1]),
+#    lv_score = map_dbl(match_data, ~ as.numeric(.x$LV[2])),
+    
+#    cosine_name = map_chr(match_data, ~ .x$Cosine[1]),
+#    cosine_score = map_dbl(match_data, ~ as.numeric(.x$Cosine[2])),
+    
+#    ngram_name = map_chr(match_data, ~ .x$Ngram[1]),
+#    ngram_score = map_dbl(match_data, ~ as.numeric(.x$Ngram[2]))
+#  )
+
+
+#write_csv(key_unique_plaintiff_names, "data/key-unique-plaintiff-names.csv")
+```
+
+#### PREPARING FOR OPENREFINE
+
+```{r}
+
+#reading in dataframe created by above
+#key_unique_plaintiff_names <- read_csv("data/key-unique-plaintiff-names.csv")
+
+#filtering for all matches from initial analysis and for those matches that have close scores
+#filtered_key_uniquie_plaintiff_names <- key_unique_plaintiff_names |>
+#  filter(#name %in% unique_plaintiff_names$name,
+#         jw_score <= .1 | lv_name <= .1 | ngram_score <= 10 | str_detect(name, "finan center|medical center|medical system|hospital| medical ctr|adventist healthcare|krieger inst|saint luke inst|st. luke inst|brook lane health|western maryland center|deer's head center|behavioral health|rehabilitation")) |>
+#  mutate(clean_name = name) #|>
+  #write_csv("data/names-for-openrefine.csv")
+
+#building full dataset of filtered unique names since openrefine is better with the full dataset
+#plaintiff_names |>
+#  filter(name %in% filtered_key_uniquie_plaintiff_names$name) |>
+#  mutate(clean_names = name) #|>
+  #write_csv("data/non-unique-names-for-openrefine.csv")
+
+```
+
+#### REVIEWING OPENREFINE OUTPUT
+
+```{r}
+
+hospitals |>
+  filter(type == "acute, general and special hospitals") |>
+  write_csv("data/general-hospitals.csv")
+
+```
+
+### HAND-MATCHING REFINED PLAINTIFFS TO HOSPITALS
+
+```{r}
+
+refined_plaintiffs <- read_csv("data/non-unique-names-for-openrefine-csv-final-csv.csv")
+
+grouped_refined_plaintiffs <- refined_plaintiffs |>
+  mutate(federal_credit = case_when(
+    str_detect(name, "peninsula") == TRUE & str_detect(name, "f") == TRUE ~ TRUE,
+    .default = FALSE
+  )) |>
+  group_by(clean_names, federal_credit) |>
+  count() |>
+  arrange(desc(n)) |>
+  filter(n >= 100) |>
+  bind_rows(
+    
+    refined_plaintiffs |>
+      mutate(federal_credit = case_when(
+        str_detect(name, "peninsula") == TRUE & str_detect(name, "f") == TRUE ~ TRUE,
+        .default = FALSE
+      )) |>
+      group_by(clean_names, federal_credit) |>
+      count() |>
+      arrange(desc(n)) |>
+      filter(str_detect(clean_names, "pen|fort was|south|so "), n >= 10)
+    
+  ) 
+
+#grouped_refined_plaintiffs |>
+  #write_csv("data/final-name-cleaning.csv")
+
+
+```
+
+
+```{r}
+
+final_names <- read_csv("data/final-name-cleaning.csv") |>
+  #filter(!is.na(hospital_join_name)) |>
+  filter(hospital_join_name %in% hospitals$facility_name) |> 
+  filter(federal_credit != TRUE)
+
+final_names |>
+  group_by(hospital_join_name) |>
+  summarise(count = sum(n)) |>
+  arrange(desc(count))
+
+```
+
+```{r}
+
+hospital_name_crosswalk <- refined_plaintiffs |>
+  inner_join(final_names) |>
+  select(name, hospital_join_name) |>
+  unique()
+
+#write_csv(hospital_name_crosswalk, "data/hospital-name-crosswalk.csv")
+
+```
+
+
+## BUILD DATABASE OF DEFENDANTS WHO HAD A JUDGMENT
+
+```{r}
+
+cc_hospital_plaintiffs <- cc_plaintiffs |>
+  lower_df() |>
+  filter(name %in% hospital_name_crosswalk$name) |>
+  left_join(hospital_name_crosswalk)
+
+cc_hospital_cases <- read_csv("data/cc/cc.csv")  |>
+  lower_df() |>
+  filter(case_number %in% cc_hospital_plaintiffs$case_number)  |>
+  filter(year(filing_date) >= 2000)
+
+cc_hospital_judgments <- read_csv("data/cc/cc_judgments.csv") |>
+  lower_df() |>
+  filter(case_number %in% cc_hospital_cases$case_number)
+
+cc_hospital_attorneys <- read_csv("data/cc/cc_attorneys.csv") |>
+  lower_df() |>
+  filter(case_number %in% cc_hospital_judgments$case_number)
+
+cc_hospital_defendants <- read_csv("data/cc/cc_defendants.csv") |>
+  lower_df() |>
+  filter(case_number %in% cc_hospital_judgments$case_number)
+
+########
+# MCCI #
+########
+
+mcci_hospital_plaintiffs <- mcci_plaintiffs |>
+  lower_df() |>
+  filter(name %in% hospital_name_crosswalk$name) |>
+  left_join(hospital_name_crosswalk)
+
+mcci_hospital_cases <- read_csv("data/mcci/mcci.csv") |>
+  lower_df() |>
+  filter(case_number %in% mcci_hospital_plaintiffs$case_number)  |>
+  filter(year(filing_date) >= 2000)
+
+mcci_hospital_judgments <- read_csv("data/mcci/mcci_judgments.csv") |>
+  lower_df() |>
+  filter(case_number %in% mcci_hospital_cases$case_number)
+
+mcci_hospital_attorneys <- read_csv("data/mcci/mcci_attorneys.csv") |>
+  lower_df() |>
+  filter(case_number %in% mcci_hospital_judgments$case_number)
+  
+mcci_hospital_defendants <- read_csv("data/mcci/mcci_defendants.csv") %>%
+  lower_df() |>
+  filter(case_number %in% mcci_hospital_judgments$case_number)
+
+###########
+# DSCIVIL #
+###########
+
+dscivil_hospital_plaintiffs <- dscivil_parties |>
+  lower_df() |>
+  filter(name %in% hospital_name_crosswalk$name) |>
+  left_join(hospital_name_crosswalk)
+
+dscivil_hospital_cases <- read_csv("data/dscivil/dscivil.csv") |>
+  lower_df() |>
+  filter(case_number %in% dscivil_hospital_plaintiffs$case_number) |>
+  filter(year(filing_date) >= 2000)
+
+dscivil_hospital_judgments <- read_csv("data/dscivil/dscivil_judgments.csv") |>
+  lower_df() |>
+  filter(case_number %in% dscivil_hospital_cases$case_number) |>
+  mutate(total_judgement = judgment_amount + other_amounts + attorney_fees) |>
+  filter(judgment_amount != 0)  |>
+  filter(!str_detect(judgment_type, "dismiss"))
+
+dscivil_hospital_attorneys <- read_csv("data/dscivil/dscivil_related_persons.csv") |>
+  lower_df()  |>
+  filter(connection == "attorney for plaintiff") |>
+  filter(case_number %in% dscivil_hospital_judgments$case_number)
+
+dscivil_hospital_defendants <- read_csv("data/dscivil/dscivil_related_persons.csv") %>%
+  lower_df() %>%
+  clean_names() %>%
+  filter(str_detect(connection, "defendant")) |>
+  filter(case_number %in% dscivil_hospital_judgments$case_number)
+
+############
+# ODYCIVIL #
+############
+
+odycivil_hospital_plaintiffs <- odycivil_involved_parties |>
+  lower_df() |>
+  filter(name %in% hospital_name_crosswalk$name) |>
+  left_join(hospital_name_crosswalk)
+
+odycivil_hospital_cases <- read_csv("data/odycivil/odycivil.csv") |>
+  lower_df() |>
+  filter(case_number %in% odycivil_hospital_plaintiffs$case_number) |>
+  filter(year(filing_date) >= 2000)
+
+odycivil_hospital_judgments <- read_csv("data/odycivil/odycivil_judgments.csv") |>
+  lower_df() |>
+  filter(!is.na(judgment_type)) |>
+  filter(case_number %in% odycivil_hospital_cases$case_number)
+
+odycivil_hospital_attorneys <- read_csv("data/odycivil/odycivil_attorneys.csv") |>
+  lower_df() |>
+  filter(case_number %in% odycivil_hospital_judgments$case_number)
+
+odycivil_hospital_defendants <- read_csv("data/odycivil/odycivil_involved_parties.csv") %>%
+  lower_df() %>%
+  clean_names() %>%
+  filter(str_detect(party_type, "defendant|garnishee|respondent")) |>
+  filter(case_number %in% odycivil_hospital_judgments$case_number) 
+
+#######
+# PGV #
+#######
+
+pgv_hospital_plaintiffs <- pgv_plaintiffs |>
+  lower_df() |>
+  filter(name %in% hospital_name_crosswalk$name) |>
+  left_join(hospital_name_crosswalk)
+
+pgv_hospital_cases <-read_csv("data/pgv/pgv.csv") |>
+  lower_df() |>
+  filter(case_number %in% pgv_hospital_plaintiffs$case_number) |>
+  filter(year(filing_date) >= 2000)
+
+pgv_hospital_judgments <- read_csv("data/pgv/pgv_judgments.csv") |>
+  lower_df() |>
+  filter(case_number %in% pgv_hospital_cases$case_number)
+
+pgv_hospital_attorneys <- read_csv("data/pgv/pgv_attorneys.csv") |>
+  lower_df() |>
+  filter(case_number %in% pgv_hospital_judgments$case_number)
+
+pgv_hospital_defendants <- read_csv("data/pgv/pgv_defendants.csv") %>%
+  lower_df() %>%
+  clean_names() |>
+  filter(case_number %in% pgv_hospital_plaintiffs$case_number)
+
+```
+
+### BUILD ADDRESSES TO GEOCODE
+
+```{r}
+
+# cc_hospital_defendants has no addresses
+
+defendant_addresses <- mcci_hospital_defendants |>
+  select(address, city, state, zip_code) |>
+  #unique() |>
+  bind_rows(
+    
+    dscivil_hospital_defendants |>
+      select(address_1, address_2, city, state, zip_code) |>
+      mutate(address = paste(address_1, address_2)) |>
+      select(-c(address_1, address_2)) |>
+      relocate(address)# |>
+      #unique()
+    
+  ) |>
+  bind_rows(
+    
+    odycivil_hospital_defendants|>
+      select(address_1, address_2, city, state, zip_code) |>
+      mutate(address = paste(address_1, address_2)) |>
+      select(-c(address_1, address_2)) |>
+      relocate(address)# |>
+      #unique()
+    
+  ) |>
+  bind_rows(
+    
+    pgv_hospital_defendants |>
+      rename(address = address_1) |>
+      select(address, city, state, zip_code)# |>
+      #unique()
+    
+  ) |>
+  unique()
+
+#write_csv(defendant_addresses, "data/defendant-addresses-to-geocode.csv")
+
+```
+
